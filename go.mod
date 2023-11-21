@@ -2,7 +2,10 @@ module prettyplan
 
 go 1.20
 
-require github.com/hashicorp/terraform-json v0.18.0
+require (
+	github.com/google/go-cmp v0.6.0
+	github.com/hashicorp/terraform-json v0.18.0
+)
 
 require (
 	github.com/apparentlymart/go-textseg/v15 v15.0.0 // indirect
