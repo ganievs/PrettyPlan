@@ -1,6 +1,6 @@
 .PHONY: build
 build:
-	go build -o dist/pp cmd/prettyplan/main.go
+	go build -o dist/pp cmd/prettyplan/pp.go
 
 .PHONY: test
 test:
