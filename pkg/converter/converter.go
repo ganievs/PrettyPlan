@@ -1,9 +1,11 @@
 package converter
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 
 	"github.com/google/go-cmp/cmp"
@@ -32,7 +34,7 @@ func DecodePlan(input io.Reader) (plan *tfjson.Plan, err error) {
 	return plan, err
 }
 
-func ConvertPlanOld(plan *tfjson.Plan) (planData PlanData, err error) {
+func ConvertPlan(plan *tfjson.Plan) (planData PlanData, err error) {
 	for _, resource := range plan.ResourceChanges {
 		if resource.Change.Actions.NoOp() || resource.Change.Actions.Read() {
 			continue
@@ -40,30 +42,47 @@ func ConvertPlanOld(plan *tfjson.Plan) (planData PlanData, err error) {
 
 		switch {
 		case resource.Change.Actions.Create():
-			beforeJSON, _ := json.MarshalIndent(resource.Change.Before, "", "  ")
-			afterJSON, _ := json.MarshalIndent(resource.Change.After, "", "  ")
-			diff := cmp.Diff(string(beforeJSON), string(afterJSON))
+			after, err := formatJson("+", resource.Change.After)
+			if err != nil {
+				fmt.Println("Error:", err)
+			}
 			planData.CreatedAddresses = make(map[string]interface{})
-			planData.CreatedAddresses[resource.Address] = diff
-			planData.ResourceChanges = append(planData.ResourceChanges, diff)
+			planData.CreatedAddresses[resource.Address] = string(after)
+			planData.ResourceChanges = append(planData.ResourceChanges, string(after))
+
 		case resource.Change.Actions.Update():
-			beforeJSON, _ := json.MarshalIndent(resource.Change.Before, "", "  ")
-			afterJSON, _ := json.MarshalIndent(resource.Change.After, "", "  ")
-			diff := cmp.Diff(string(beforeJSON), string(afterJSON))
+			before, err := formatJson(" ", resource.Change.Before)
+			if err != nil {
+				fmt.Println("Error:", err)
+			}
+			after, err := formatJson(" ", resource.Change.After)
+			if err != nil {
+				fmt.Println("Error:", err)
+			}
+			diff := cmp.Diff(string(before), string(after))
 			planData.UpdatedAddresses = make(map[string]interface{})
 			planData.UpdatedAddresses[resource.Address] = diff
 			planData.ResourceChanges = append(planData.ResourceChanges, diff)
+
 		case resource.Change.Actions.Delete():
-			beforeJSON, _ := json.MarshalIndent(resource.Change.Before, "", "  ")
-			afterJSON, _ := json.MarshalIndent(resource.Change.After, "", "  ")
-			diff := cmp.Diff(string(beforeJSON), string(afterJSON))
+			before, err := formatJson("-", resource.Change.Before)
+			if err != nil {
+				fmt.Println("Error:", err)
+			}
 			planData.DeletedAddresses = make(map[string]interface{})
-			planData.DeletedAddresses[resource.Address] = diff
-			planData.ResourceChanges = append(planData.ResourceChanges, diff)
+			planData.DeletedAddresses[resource.Address] = string(before)
+			planData.ResourceChanges = append(planData.ResourceChanges, string(before))
+
 		case resource.Change.Actions.Replace():
-			beforeJSON, _ := json.MarshalIndent(resource.Change.Before, "", "  ")
-			afterJSON, _ := json.MarshalIndent(resource.Change.After, "", "  ")
-			diff := cmp.Diff(string(beforeJSON), string(afterJSON))
+			before, err := formatJson(" ", resource.Change.Before)
+			if err != nil {
+				fmt.Println("Error:", err)
+			}
+			after, err := formatJson(" ", resource.Change.After)
+			if err != nil {
+				fmt.Println("Error:", err)
+			}
+			diff := cmp.Diff(string(before), string(after))
 			planData.ReplacedAddresses = make(map[string]interface{})
 			planData.ReplacedAddresses[resource.Address] = diff
 			planData.ResourceChanges = append(planData.ResourceChanges, diff)
@@ -73,7 +92,7 @@ func ConvertPlanOld(plan *tfjson.Plan) (planData PlanData, err error) {
 	return planData, err
 }
 
-func ConvertPlan(plan *tfjson.Plan) (planData string, err error) {
+func ConvertPlanTest(plan *tfjson.Plan) (planData string, err error) {
 	var outputBuilder strings.Builder
 
 	outputBuilder.WriteString("Terraform will perform the following actions:\n\n")
@@ -83,28 +102,40 @@ func ConvertPlan(plan *tfjson.Plan) (planData string, err error) {
 			continue
 		}
 
-		var changeColor string
 		switch {
 		case resource.Change.Actions.Create():
-			changeColor = "\033[32m" // Green
-			outputBuilder.WriteString(fmt.Sprintf("\033[1m# %s\033[0m will be %s\n", resource.Address, "create"))
-			outputBuilder.WriteString(fmt.Sprintf("%s resource \"%s\" \"%s\" {\n", changeColor, resource.Type, resource.Name))
+			outputBuilder.WriteString(fmt.Sprintf("%s will be %s\n", resource.Address, "create"))
+			outputBuilder.WriteString(fmt.Sprintf("resource \"%s\" \"%s\" {\n", resource.Type, resource.Name))
 			afterJSON, _ := json.MarshalIndent(resource.Change.After, "+", "  ")
-			outputBuilder.WriteString(fmt.Sprintf("  %s+ %s\n", changeColor, string(afterJSON)))
+			after := bytes.Trim(afterJSON, "\x00")
+			// after, err := removeNullValues("+", afterJSON)
+			// if err != nil {
+			// 	fmt.Println("Error:", err)
+			// }
+			outputBuilder.WriteString(fmt.Sprintf("%s\n", string(after)))
 		case resource.Change.Actions.Update():
-			changeColor = "\033[33m" // Yellow
-			outputBuilder.WriteString(fmt.Sprintf("\033[1m# %s\033[0m will be %s\n", resource.Address, "update"))
+			outputBuilder.WriteString(fmt.Sprintf("%s will be %s\n", resource.Address, "update"))
 			// outputBuilder.WriteString(fmt.Sprintf("%s resource \"%s\" \"%s\" {\n", changeColor, resource.Type, resource.Name))
-			beforeJSON, _ := json.MarshalIndent(resource.Change.Before, "-", "  ")
-			afterJSON, _ := json.MarshalIndent(resource.Change.After, "+", "  ")
-			outputBuilder.WriteString(fmt.Sprintf("  %s~ before = %s\n", changeColor, string(beforeJSON)))
-			outputBuilder.WriteString(fmt.Sprintf("  %s~ after = %s\n", changeColor, string(afterJSON)))
+			beforeJSON, _ := json.MarshalIndent(resource.Change.Before, " ", "  ")
+			before, err := formatJson("-", beforeJSON)
+			if err != nil {
+				fmt.Println("Error:", err)
+			}
+			after, err := formatJson("+", resource.Change.After)
+			if err != nil {
+				fmt.Println("Error:", err)
+			}
+			outputBuilder.WriteString(fmt.Sprintf("%s\n", string(before)))
+			outputBuilder.WriteString(fmt.Sprintf("%s\n", string(after)))
 		case resource.Change.Actions.Delete():
-			changeColor = "\033[31m" // Red
-			outputBuilder.WriteString(fmt.Sprintf("\033[1m# %s\033[0m will be %s\n", resource.Address, "delete"))
-			outputBuilder.WriteString(fmt.Sprintf("%s resource \"%s\" \"%s\" {\n", changeColor, resource.Type, resource.Name))
-			beforeJSON, _ := json.MarshalIndent(resource.Change.Before, "-", "  ")
-			outputBuilder.WriteString(fmt.Sprintf("  %s- %s\n", changeColor, string(beforeJSON)))
+			outputBuilder.WriteString(fmt.Sprintf("%s will be %s\n", resource.Address, "delete"))
+			outputBuilder.WriteString(fmt.Sprintf("resource \"%s\" \"%s\" {\n", resource.Type, resource.Name))
+			beforeJSON, _ := json.MarshalIndent(resource.Change.Before, " ", "  ")
+			before, err := formatJson("-", beforeJSON)
+			if err != nil {
+				fmt.Println("Error:", err)
+			}
+			outputBuilder.WriteString(fmt.Sprintf("%s\n", string(before)))
 		}
 
 		outputBuilder.WriteString("}\n\n")
@@ -114,4 +145,43 @@ func ConvertPlan(plan *tfjson.Plan) (planData string, err error) {
 
 	planData = outputBuilder.String()
 	return planData, err
+}
+
+func removeNullValuesFromMap(data map[string]interface{}) {
+	for key, value := range data {
+
+		// Remove Null values
+		if value == nil {
+			delete(data, key)
+			continue
+		}
+
+		// If the value is a map, recursively remove null values from it.
+		if reflect.TypeOf(value).Kind() == reflect.Map {
+			if subMap, ok := value.(map[string]interface{}); ok {
+				removeNullValuesFromMap(subMap)
+			}
+		}
+
+		// If the value is a slice, check each element.
+		if reflect.TypeOf(value).Kind() == reflect.Slice {
+			if subSlice, ok := value.([]interface{}); ok {
+				for i, item := range subSlice {
+					if itemMap, ok := item.(map[string]interface{}); ok {
+						removeNullValuesFromMap(itemMap)
+						subSlice[i] = itemMap
+					}
+				}
+			}
+		}
+	}
+}
+
+func formatJson(ident string, jsonData interface{}) ([]byte, error) {
+	if mapData, ok := jsonData.(map[string]interface{}); ok {
+		removeNullValuesFromMap(mapData)
+		return json.MarshalIndent(mapData, ident, "   ")
+	}
+
+	return nil, nil
 }
